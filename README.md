@@ -1,6 +1,6 @@
 # METAR API
 
-Small Node.js API that fetches METAR from AviationWeather and returns text with `Qxxxx` converted to inHg code `Axxxx`.
+Small Node.js API that fetches METAR from AviationWeather and returns XML with METAR text in a `raw_text` tag, converting `Qxxxx` to inHg code `Axxxx`.
 
 Source API: https://aviationweather.gov/data/api/#schema
 
@@ -28,12 +28,12 @@ Server starts on `http://localhost:3000`.
 
 Example response:
 
-```json
-{
-  "icao": "MDSD",
-  "source": "https://aviationweather.gov/data/api/#schema",
-  "metar_raw": "MDSD 280000Z 15006KT 9999 SCT018 BKN300 27/24 Q1014",
-  "metar_inhg": "MDSD 280000Z 15006KT 9999 SCT018 BKN300 27/24 A2994"
-}
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<response>
+  <icao>MDSD</icao>
+  <source>https://aviationweather.gov/data/api/#schema</source>
+  <raw_text>MDSD 280000Z 15006KT 9999 SCT018 BKN300 27/24 A2994</raw_text>
+</response>
 ```
 # metarconverter

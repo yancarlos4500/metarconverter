@@ -1,0 +1,12 @@
+{
+  "name": "metar-api",
+  "version": "1.0.0",
+  "description": "Simple API to fetch METAR and convert QNH Qxxxx to INHG Axxxx",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
