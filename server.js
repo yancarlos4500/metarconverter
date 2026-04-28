@@ -26,9 +26,9 @@ function escapeXml(value) {
     .replace(/'/g, '&apos;');
 }
 
-async function fetchMetar(icao) {
+async function fetchMetars(ids) {
   const endpoint = new URL('https://aviationweather.gov/api/data/metar');
-  endpoint.searchParams.set('ids', icao);
+  endpoint.searchParams.set('ids', ids.join(','));
   endpoint.searchParams.set('format', 'json');
 
   const response = await fetch(endpoint);
@@ -38,40 +38,67 @@ async function fetchMetar(icao) {
 
   const data = await response.json();
   if (!Array.isArray(data) || data.length === 0) {
-    throw new Error(`No METAR found for ICAO '${icao}'.`);
+    throw new Error(`No METAR found for ICAO(s) '${ids.join(',')}'.`);
   }
 
-  const first = data[0];
-  const rawMetar = first.rawOb || first.raw_text;
-  if (!rawMetar || typeof rawMetar !== 'string') {
-    throw new Error('METAR response did not include a raw METAR text field.');
-  }
-
-  return rawMetar;
+  return data;
 }
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
   if (req.method === 'GET' && url.pathname === '/metar') {
-    const icao = (url.searchParams.get('icao') || '').trim().toUpperCase();
+    const format = (url.searchParams.get('format') || 'xml').trim().toLowerCase();
+    const idsParam = (url.searchParams.get('ids') || url.searchParams.get('icao') || '').trim().toUpperCase();
+    const ids = idsParam
+      .split(',')
+      .map((id) => id.trim())
+      .filter(Boolean);
 
-    if (!icao || !/^[A-Z]{4}$/.test(icao)) {
+    if (format !== 'xml') {
       res.writeHead(400, { 'Content-Type': 'application/xml; charset=utf-8' });
-      res.end('<?xml version="1.0" encoding="UTF-8"?>\n<error>Invalid ICAO. Use 4-letter ICAO code, e.g. /metar?icao=MDSD</error>');
+      res.end('<?xml version="1.0" encoding="UTF-8"?>\n<error>Invalid format. Use format=xml</error>');
+      return;
+    }
+
+    if (ids.length === 0 || ids.some((id) => !/^[A-Z]{4}$/.test(id))) {
+      res.writeHead(400, { 'Content-Type': 'application/xml; charset=utf-8' });
+      res.end('<?xml version="1.0" encoding="UTF-8"?>\n<error>Invalid ids. Use comma-separated ICAO values, e.g. /metar?ids=MDSD,MDPC&amp;format=xml</error>');
       return;
     }
 
     try {
-      const rawMetar = await fetchMetar(icao);
-      const convertedMetar = convertQnhToInHgInMetar(rawMetar);
+      const rows = await fetchMetars(ids);
+      const metarEntries = rows
+        .map((row) => {
+          const station = row.icaoId || row.icao || row.station_id || '';
+          const rawMetar = row.rawOb || row.raw_text;
+          if (!station || !rawMetar || typeof rawMetar !== 'string') {
+            return null;
+          }
+
+          const convertedMetar = convertQnhToInHgInMetar(rawMetar);
+          return [
+            '  <metar>',
+            `    <icao>${escapeXml(station)}</icao>`,
+            `    <raw_text>${escapeXml(convertedMetar)}</raw_text>`,
+            '  </metar>'
+          ].join('\n');
+        })
+        .filter(Boolean);
+
+      if (metarEntries.length === 0) {
+        res.writeHead(404, { 'Content-Type': 'application/xml; charset=utf-8' });
+        res.end('<?xml version="1.0" encoding="UTF-8"?>\n<error>No valid METAR entries found for requested ids.</error>');
+        return;
+      }
 
       const xml = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         '<response>',
-        `  <icao>${escapeXml(icao)}</icao>`,
+        `  <query_ids>${escapeXml(ids.join(','))}</query_ids>`,
         '  <source>https://aviationweather.gov/data/api/#schema</source>',
-        `  <raw_text>${escapeXml(convertedMetar)}</raw_text>`,
+        ...metarEntries,
         '</response>'
       ].join('\n');
 
@@ -88,7 +115,7 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({
       message: 'METAR API is running',
-      usage: '/metar?icao=MDSD'
+      usage: '/metar?ids=MDSD,MDPC&format=xml'
     }));
     return;
   }

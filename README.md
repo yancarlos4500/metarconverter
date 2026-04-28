@@ -24,16 +24,23 @@ Server starts on `http://localhost:3000`.
 
 ## Endpoint
 
-`GET /metar?icao=MDSD`
+`GET /metar?ids=MDSD,MDPC&format=xml`
 
 Example response:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <response>
-  <icao>MDSD</icao>
+  <query_ids>MDSD,MDPC</query_ids>
   <source>https://aviationweather.gov/data/api/#schema</source>
-  <raw_text>MDSD 280000Z 15006KT 9999 SCT018 BKN300 27/24 A2994</raw_text>
+  <metar>
+    <icao>MDSD</icao>
+    <raw_text>MDSD 280000Z 15006KT 9999 SCT018 BKN300 27/24 A2994</raw_text>
+  </metar>
+  <metar>
+    <icao>MDPC</icao>
+    <raw_text>MDPC 280000Z 11008KT 9999 FEW020 26/24 A2992</raw_text>
+  </metar>
 </response>
 ```
 # metarconverter
