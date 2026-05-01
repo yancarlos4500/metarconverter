@@ -31,17 +31,42 @@ async function fetchMetars(ids) {
   endpoint.searchParams.set('ids', ids.join(','));
   endpoint.searchParams.set('format', 'json');
 
-  const response = await fetch(endpoint);
+  const response = await fetch(endpoint, {
+    headers: {
+      Accept: 'application/json'
+    }
+  });
+
+  if (response.status === 204) {
+    throw new Error(`No METAR found for ICAO(s) '${ids.join(',')}'.`);
+  }
+
+  const rawBody = await response.text();
+
   if (!response.ok) {
     throw new Error(`AviationWeather API error: ${response.status} ${response.statusText}`);
   }
 
-  const data = await response.json();
-  if (!Array.isArray(data) || data.length === 0) {
+  if (!rawBody.trim()) {
     throw new Error(`No METAR found for ICAO(s) '${ids.join(',')}'.`);
   }
 
-  return data;
+  let data;
+  try {
+    data = JSON.parse(rawBody);
+  } catch {
+    throw new Error('AviationWeather API returned malformed JSON.');
+  }
+
+  const rows = Array.isArray(data)
+    ? data
+    : (data && Array.isArray(data.data) ? data.data : []);
+
+  if (rows.length === 0) {
+    throw new Error(`No METAR found for ICAO(s) '${ids.join(',')}'.`);
+  }
+
+  return rows;
 }
 
 const server = http.createServer(async (req, res) => {
@@ -77,7 +102,8 @@ const server = http.createServer(async (req, res) => {
             return null;
           }
 
-          const convertedMetar = convertQnhToInHgInMetar(rawMetar);
+          const normalizedMetar = rawMetar.replace(/^\s*METAR\s+/i, '');
+          const convertedMetar = convertQnhToInHgInMetar(normalizedMetar);
           return [
             '  <metar>',
             `    <icao>${escapeXml(station)}</icao>`,
