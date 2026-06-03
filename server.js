@@ -1,7 +1,42 @@
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 const { URL } = require('url');
+const gateApi = require('./gateAssignments');
 
 const PORT = process.env.PORT || 3000;
+const MAP_HTML_PATH = path.join(__dirname, 'public', 'map.html');
+
+function sendJson(res, status, payload) {
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify(payload));
+}
+
+function readJsonBody(req, limitBytes = 64 * 1024) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > limitBytes) {
+        reject(Object.assign(new Error('Request body too large'), { statusCode: 413 }));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf-8').trim();
+      if (!raw) return resolve({});
+      try {
+        resolve(JSON.parse(raw));
+      } catch {
+        reject(Object.assign(new Error('Invalid JSON body'), { statusCode: 400 }));
+      }
+    });
+    req.on('error', reject);
+  });
+}
 
 function qnhHpaToAltimeterInHgCode(qnhHpa) {
   const inHg = qnhHpa * 0.0295299830714;
@@ -137,18 +172,145 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === 'GET' && url.pathname === '/') {
+  if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/map')) {
+    fs.readFile(MAP_HTML_PATH, (err, content) => {
+      if (err) {
+        sendJson(res, 500, { error: 'Failed to load map UI.' });
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(content);
+    });
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api') {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({
       message: 'METAR API is running',
-      usage: '/metar?ids=MDSD,MDPC&format=xml'
+      endpoints: {
+        map: 'GET /  (or /map) — interactive map UI',
+        metar: '/metar?ids=MDSD,MDPC&format=xml',
+        listAirports: 'GET /gates',
+        airportDetail: 'GET /gates/:icao',
+        createAssignment: 'POST /gates/:icao/assignments  body:{callsign,gate?}',
+        changeAssignment: 'PUT /gates/:icao/assignments/:callsign  body:{gate}',
+        releaseAssignment: 'DELETE /gates/:icao/assignments/:callsign',
+        forceRefresh: 'POST /gates/refresh'
+      }
     }));
+    return;
+  }
+
+  // ---- Gate assignment API (Dominican Republic airports) ----
+  // GET    /gates                       -> list DR airports + counts
+  // GET    /gates/:icao                 -> list gates, available, current assignments
+  // POST   /gates/:icao/assignments     -> body { callsign, gate? } create/override
+  // PUT    /gates/:icao/assignments/:cs -> body { gate } change gate
+  // DELETE /gates/:icao/assignments/:cs -> release assignment
+  // POST   /gates/refresh               -> force VATSIM refresh
+
+  if (url.pathname === '/gates' && req.method === 'GET') {
+    sendJson(res, 200, { airports: gateApi.listAirports() });
+    return;
+  }
+
+  if (url.pathname === '/gates/refresh' && req.method === 'POST') {
+    try {
+      await gateApi.refreshFromVatsim();
+      sendJson(res, 200, { ok: true });
+    } catch (err) {
+      sendJson(res, 502, { error: err.message });
+    }
+    return;
+  }
+
+  const gatesMatch = url.pathname.match(/^\/gates\/([A-Za-z]{4})(?:\/assignments(?:\/([^/]+))?)?\/?$/);
+  if (gatesMatch) {
+    const icao = gatesMatch[1].toUpperCase();
+    const callsignParam = gatesMatch[2] ? decodeURIComponent(gatesMatch[2]).toUpperCase() : null;
+
+    if (!gateApi.isDrAirport(icao)) {
+      sendJson(res, 404, { error: `Airport '${icao}' is not a supported Dominican Republic airport.` });
+      return;
+    }
+
+    const isAssignmentsRoot = url.pathname.match(/\/assignments\/?$/) && !callsignParam;
+    const isAssignmentItem = !!callsignParam;
+    const isAirportRoot = !url.pathname.includes('/assignments');
+
+    // GET airport details
+    if (isAirportRoot && req.method === 'GET') {
+      sendJson(res, 200, gateApi.listAssignments(icao));
+      return;
+    }
+
+    // POST new assignment (auto-pick or specified gate)
+    if (isAssignmentsRoot && req.method === 'POST') {
+      try {
+        const body = await readJsonBody(req);
+        const callsign = String(body.callsign || '').trim().toUpperCase();
+        if (!callsign) {
+          sendJson(res, 400, { error: 'Body field "callsign" is required.' });
+          return;
+        }
+        const gate = body.gate ? String(body.gate).trim() : null;
+        let assignment;
+        if (gate) {
+          assignment = gateApi.setAssignment(icao, callsign, gate);
+        } else {
+          // auto-assign next free gate using the same preference rules.
+          const auto = gateApi.autoAssign(icao, callsign, {});
+          if (!auto) {
+            sendJson(res, 409, { error: `No available gates at ${icao}.` });
+            return;
+          }
+          assignment = auto;
+        }
+        sendJson(res, 200, { icao, callsign, ...assignment });
+      } catch (err) {
+        sendJson(res, err.statusCode || 400, { error: err.message });
+      }
+      return;
+    }
+
+    // PUT change gate for a specific callsign
+    if (isAssignmentItem && req.method === 'PUT') {
+      try {
+        const body = await readJsonBody(req);
+        const gate = body.gate ? String(body.gate).trim() : null;
+        if (!gate) {
+          sendJson(res, 400, { error: 'Body field "gate" is required.' });
+          return;
+        }
+        const assignment = gateApi.setAssignment(icao, callsignParam, gate);
+        sendJson(res, 200, { icao, callsign: callsignParam, ...assignment });
+      } catch (err) {
+        sendJson(res, err.statusCode || 400, { error: err.message });
+      }
+      return;
+    }
+
+    // DELETE release a callsign's gate
+    if (isAssignmentItem && req.method === 'DELETE') {
+      const ok = gateApi.releaseAssignment(icao, callsignParam);
+      if (!ok) {
+        sendJson(res, 404, { error: `No assignment found for ${callsignParam} at ${icao}.` });
+        return;
+      }
+      sendJson(res, 200, { ok: true, icao, callsign: callsignParam });
+      return;
+    }
+
+    sendJson(res, 405, { error: 'Method not allowed.' });
     return;
   }
 
   res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify({ error: 'Not found' }));
 });
+
+gateApi.startRefreshLoop();
 
 server.listen(PORT, () => {
   console.log(`METAR API listening on http://localhost:${PORT}`);

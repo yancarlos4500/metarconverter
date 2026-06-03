@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DR Gate Assignments</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+    #app { display: flex; height: 100vh; }
+    #map { flex: 1 1 auto; }
+    #sidebar {
+      width: 380px; flex: 0 0 380px; background: #f7f7fa; border-left: 1px solid #ddd;
+      overflow-y: auto; padding: 12px 16px;
+    }
+    h1 { font-size: 18px; margin: 0 0 4px; }
+    h2 { font-size: 15px; margin: 14px 0 6px; }
+    .muted { color: #666; font-size: 12px; }
+    .airport { padding: 6px 8px; border-radius: 6px; cursor: pointer; margin-bottom: 4px; }
+    .airport:hover { background: #ececf2; }
+    .airport.active { background: #2563eb; color: white; }
+    .row { display: flex; justify-content: space-between; align-items: center; gap: 6px; padding: 4px 0; border-bottom: 1px solid #eee; font-size: 13px; }
+    .row:last-child { border-bottom: none; }
+    .pill { display: inline-block; background: #e5e7eb; color: #111; border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 600; }
+    .pill.manual { background: #fde68a; }
+    .pill.auto { background: #bbf7d0; }
+    button {
+      border: 1px solid #ccc; background: white; border-radius: 4px; padding: 2px 6px;
+      cursor: pointer; font-size: 12px;
+    }
+    button:hover { background: #f0f0f0; }
+    button.danger { color: #b91c1c; border-color: #fca5a5; }
+    .gates-grid { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 12px; }
+    .gate-chip { font-size: 11px; padding: 2px 6px; border-radius: 4px; background: #e5e7eb; }
+    .gate-chip.used { background: #fecaca; color: #7f1d1d; }
+    .gate-chip.free { background: #bbf7d0; color: #14532d; }
+    #refresh { margin-left: 6px; }
+    .toolbar { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+    input[type=text] { padding: 3px 6px; font-size: 12px; border: 1px solid #ccc; border-radius: 4px; }
+    .leaflet-popup-content { font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="map"></div>
+    <aside id="sidebar">
+      <h1>DR Gate Assignments</h1>
+      <div class="toolbar">
+        <span class="muted" id="status">Loading…</span>
+        <button id="refresh" title="Force VATSIM refresh">Refresh</button>
+      </div>
+      <h2>Airports</h2>
+      <div id="airport-list"></div>
+      <div id="airport-detail"></div>
+    </aside>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+  (function () {
+    const map = L.map('map').setView([18.7, -70.0], 8);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors',
+      maxZoom: 18
+    }).addTo(map);
+
+    const markers = {};
+    let airports = [];
+    let activeIcao = null;
+    const aircraftLayer = L.layerGroup().addTo(map);
+    const gateLayer = L.layerGroup().addTo(map);
+
+    function gateDivIcon(label, occupied) {
+      const bg = occupied ? '#dc2626' : '#16a34a';
+      return L.divIcon({
+        className: 'gate-icon',
+        html:
+          `<div style="background:${bg};color:white;font-size:10px;font-weight:600;` +
+          `padding:1px 4px;border-radius:3px;border:1px solid white;` +
+          `box-shadow:0 0 2px rgba(0,0,0,.5);white-space:nowrap;">${label}</div>`,
+        iconSize: null,
+        iconAnchor: [12, 6]
+      });
+    }
+
+    function renderGates(detail) {
+      gateLayer.clearLayers();
+      const latlngs = [];
+      (detail.gates || []).forEach((g) => {
+        const tooltip = g.occupied
+          ? `${detail.icao} gate ${g.gate} — ${g.callsign}`
+          : `${detail.icao} gate ${g.gate} — free`;
+        L.marker([g.lat, g.lon], { icon: gateDivIcon(g.gate, g.occupied) })
+          .bindTooltip(tooltip, { direction: 'top', offset: [0, -4] })
+          .addTo(gateLayer);
+        latlngs.push([g.lat, g.lon]);
+      });
+      if (latlngs.length > 1) {
+        map.fitBounds(L.latLngBounds(latlngs).pad(0.4), { maxZoom: 17 });
+      } else if (latlngs.length === 1) {
+        map.setView(latlngs[0], 17);
+      }
+    }
+
+    const planeIcon = L.divIcon({
+      className: 'plane-icon',
+      html: '<div style="font-size:18px;line-height:1;">✈</div>',
+      iconSize: [18, 18],
+      iconAnchor: [9, 9]
+    });
+
+    async function api(path, opts = {}) {
+      const res = await fetch(path, {
+        headers: { 'Content-Type': 'application/json' },
+        ...opts
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      return data;
+    }
+
+    function setStatus(msg) {
+      document.getElementById('status').textContent = msg;
+    }
+
+    async function loadAirports() {
+      const data = await api('/gates');
+      airports = data.airports;
+      renderAirportList();
+      airports.forEach((a) => {
+        const m = L.marker([a.lat, a.lon])
+          .addTo(map)
+          .bindTooltip(`${a.icao} — ${a.name}`, { direction: 'top' })
+          .on('click', () => selectAirport(a.icao));
+        markers[a.icao] = m;
+      });
+    }
+
+    function renderAirportList() {
+      const list = document.getElementById('airport-list');
+      list.innerHTML = '';
+      airports.forEach((a) => {
+        const div = document.createElement('div');
+        div.className = 'airport' + (a.icao === activeIcao ? ' active' : '');
+        div.innerHTML =
+          `<strong>${a.icao}</strong> ${a.name} ` +
+          `<span class="pill">${a.assigned}/${a.totalGates}</span>`;
+        div.addEventListener('click', () => selectAirport(a.icao));
+        list.appendChild(div);
+      });
+    }
+
+    async function selectAirport(icao) {
+      activeIcao = icao;
+      renderAirportList();
+      const a = airports.find((x) => x.icao === icao);
+      if (a) map.flyTo([a.lat, a.lon], 12);
+      await renderDetail(icao);
+    }
+
+    async function renderDetail(icao) {
+      const detail = document.getElementById('airport-detail');
+      detail.innerHTML = '<p class="muted">Loading…</p>';
+      let data;
+      try {
+        data = await api('/gates/' + icao);
+      } catch (e) {
+        detail.innerHTML = `<p class="muted">Error: ${e.message}</p>`;
+        return;
+      }
+      renderGates(data);
+      const allGates = [...data.available, ...data.assignments.map((x) => x.gate)];
+      const sortedGates = data.available.concat([]).sort();
+      const used = new Set(data.assignments.map((x) => x.gate));
+
+      let html = `<h2>${data.icao} — ${data.name}</h2>`;
+      html += `<p class="muted">${data.assignments.length} assigned · ${data.available.length} free · ${data.totalGates} total</p>`;
+
+      html += '<div class="gates-grid">';
+      // include all gates in original order: assigned first, then free
+      const inventory = [...data.assignments.map((x) => x.gate), ...data.available];
+      const seen = new Set();
+      inventory.forEach((g) => {
+        if (seen.has(g)) return; seen.add(g);
+        const cls = used.has(g) ? 'used' : 'free';
+        html += `<span class="gate-chip ${cls}">${g}</span>`;
+      });
+      html += '</div>';
+
+      html += '<h2>Assignments</h2>';
+      if (data.assignments.length === 0) {
+        html += '<p class="muted">No aircraft currently assigned.</p>';
+      } else {
+        data.assignments.forEach((entry) => {
+          const src = entry.source || (entry.manual ? 'manual' : 'reservation');
+          const pillCls = src === 'manual' ? 'manual' : (src === 'detected' ? 'auto' : 'auto');
+          const pillTxt = src;
+          html += `
+            <div class="row" data-cs="${entry.callsign}">
+              <div>
+                <strong>${entry.callsign}</strong>
+                <span class="pill ${pillCls}">${pillTxt}</span><br>
+                <span class="muted">${entry.aircraftType || '—'} · from ${entry.origin || '—'}</span>
+              </div>
+              <div>
+                <strong>${entry.gate}</strong>
+                <button data-action="change" data-cs="${entry.callsign}">Change</button>
+                <button class="danger" data-action="release" data-cs="${entry.callsign}">×</button>
+              </div>
+            </div>
+          `;
+        });
+      }
+
+      html += '<h2>Manual add</h2>';
+      html += `
+        <div class="row">
+          <input type="text" id="manual-cs" placeholder="Callsign" style="width:90px" />
+          <input type="text" id="manual-gate" placeholder="Gate (optional)" style="width:110px" />
+          <button id="manual-add">Add</button>
+        </div>
+      `;
+
+      detail.innerHTML = html;
+
+      detail.querySelectorAll('button[data-action="release"]').forEach((btn) => {
+        btn.addEventListener('click', () => releaseAssignment(icao, btn.dataset.cs));
+      });
+      detail.querySelectorAll('button[data-action="change"]').forEach((btn) => {
+        btn.addEventListener('click', () => changeAssignment(icao, btn.dataset.cs));
+      });
+      detail.querySelector('#manual-add').addEventListener('click', () => {
+        const cs = detail.querySelector('#manual-cs').value.trim();
+        const gate = detail.querySelector('#manual-gate').value.trim();
+        if (!cs) return alert('Callsign required');
+        addAssignment(icao, cs, gate || null);
+      });
+    }
+
+    async function refreshAll() {
+      try {
+        setStatus('Refreshing…');
+        await api('/gates/refresh', { method: 'POST' });
+        await loadAirportCounts();
+        if (activeIcao) await renderDetail(activeIcao);
+        setStatus('Updated ' + new Date().toLocaleTimeString());
+      } catch (e) {
+        setStatus('Error: ' + e.message);
+      }
+    }
+
+    async function loadAirportCounts() {
+      const data = await api('/gates');
+      airports = data.airports;
+      renderAirportList();
+    }
+
+    async function releaseAssignment(icao, callsign) {
+      if (!confirm(`Release gate for ${callsign}?`)) return;
+      try {
+        await api(`/gates/${icao}/assignments/${encodeURIComponent(callsign)}`, { method: 'DELETE' });
+        await loadAirportCounts();
+        await renderDetail(icao);
+      } catch (e) { alert(e.message); }
+    }
+
+    async function changeAssignment(icao, callsign) {
+      const gate = prompt(`New gate for ${callsign} at ${icao}:`);
+      if (!gate) return;
+      try {
+        await api(`/gates/${icao}/assignments/${encodeURIComponent(callsign)}`, {
+          method: 'PUT',
+          body: JSON.stringify({ gate: gate.trim() })
+        });
+        await loadAirportCounts();
+        await renderDetail(icao);
+      } catch (e) { alert(e.message); }
+    }
+
+    async function addAssignment(icao, callsign, gate) {
+      try {
+        await api(`/gates/${icao}/assignments`, {
+          method: 'POST',
+          body: JSON.stringify({ callsign, gate })
+        });
+        await loadAirportCounts();
+        await renderDetail(icao);
+      } catch (e) { alert(e.message); }
+    }
+
+    async function loadAircraft() {
+      try {
+        const res = await fetch('https://data.vatsim.net/v3/vatsim-data.json');
+        if (!res.ok) return;
+        const data = await res.json();
+        const drIcaos = new Set(airports.map((a) => a.icao));
+        aircraftLayer.clearLayers();
+        (data.pilots || []).forEach((p) => {
+          const arr = p.flight_plan && p.flight_plan.arrival
+            ? String(p.flight_plan.arrival).toUpperCase()
+            : null;
+          if (!arr || !drIcaos.has(arr)) return;
+          if (typeof p.latitude !== 'number' || typeof p.longitude !== 'number') return;
+          const marker = L.marker([p.latitude, p.longitude], {
+            icon: planeIcon,
+            rotationAngle: p.heading || 0
+          }).bindPopup(
+            `<strong>${p.callsign}</strong><br>` +
+            `${p.flight_plan.aircraft_short || p.flight_plan.aircraft || ''}<br>` +
+            `${p.flight_plan.departure || '?'} → <strong>${arr}</strong><br>` +
+            `Alt ${p.altitude} ft · GS ${p.groundspeed} kt`
+          );
+          marker.addTo(aircraftLayer);
+        });
+      } catch { /* ignore */ }
+    }
+
+    document.getElementById('refresh').addEventListener('click', refreshAll);
+
+    (async () => {
+      try {
+        await loadAirports();
+        setStatus('Ready');
+        await loadAircraft();
+        setInterval(loadAircraft, 30000);
+        setInterval(loadAirportCounts, 60000);
+      } catch (e) {
+        setStatus('Error: ' + e.message);
+      }
+    })();
+  })();
+  </script>
+</body>
+</html>
