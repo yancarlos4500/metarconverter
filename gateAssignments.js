@@ -25,7 +25,8 @@ const TERMINAL_B_AIRLINES = new Set([
   'CMP', // Copa Airlines
   'DAL', // Delta
   'EDW', // Edelweiss
-  'SWA'  // Southwest
+  'SWA',  // Southwest
+  'UAL', // United
 ]);
 
 // Classify a callsign into a parking preference category for MDPC.
@@ -48,8 +49,10 @@ const MDPC_BLOCKED_AUTO_GATES = new Set([
   'B23A', 'B23B', 'B29A', 'B30A'
 ]);
 
-// MDPC heavy-jet preferred stands (only these for heavies).
-const MDPC_HEAVY_GATES = ['B25', 'B23', 'B30', '1', '2', '3', '4'];
+// MDPC heavy-jet stands, in tiered priority order:
+//   tier 1: dedicated heavy B-stands; tier 2: apron-1 fallback gates.
+const MDPC_HEAVY_PREFERRED = ['B25', 'B23', 'B30'];
+const MDPC_HEAVY_OVERFLOW = ['1', '2', '3', '4'];
 
 // Apron 1 gates that must fill before N1–N5 are considered.
 const MDPC_APRON1_BEFORE_N = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11'];
@@ -117,19 +120,23 @@ function isDrAirport(icao) {
   return Object.prototype.hasOwnProperty.call(DR_AIRPORT_GATES, icao);
 }
 
-// Build the preferred gate order for a given callsign at an airport.
-function preferredGateOrder(icao, callsign, meta = {}) {
+// Build the preferred gate order for a given callsign at an airport, as a list
+// of tiers. `pickNextGate` picks randomly within the highest-priority tier
+// that still has a free gate, so lower tiers are pure fallbacks.
+function preferredGateTiers(icao, callsign, meta = {}) {
   const inventory = DR_AIRPORT_GATES[icao];
   if (!inventory) return [];
   const all = inventory.gates;
-  if (icao !== 'MDPC') return all;
+  if (icao !== 'MDPC') return [all];
 
   // Filter out gates that should never be auto-assigned.
   const allowed = all.filter((g) => !MDPC_BLOCKED_AUTO_GATES.has(g));
 
-  // Heavy aircraft: only the heavy stands (in fixed priority order).
+  // Heavy aircraft: dedicated B-stands first, apron-1 only if those are full.
   if (isHeavyType(meta.aircraftType)) {
-    return MDPC_HEAVY_GATES.filter((g) => allowed.includes(g));
+    const heavyB = MDPC_HEAVY_PREFERRED.filter((g) => allowed.includes(g));
+    const heavyApron = MDPC_HEAVY_OVERFLOW.filter((g) => allowed.includes(g));
+    return [heavyB, heavyApron];
   }
 
   const category = classifyCallsign(callsign);
@@ -153,22 +160,25 @@ function preferredGateOrder(icao, callsign, meta = {}) {
   const rest = allowed.filter((g) => !categorized.has(g));
 
   if (category === 'B') {
-    return [...terminalB, ...apron1, ...northAvailable, ...rest];
+    return [terminalB, apron1, northAvailable, rest];
   }
   // Non-Terminal-B traffic must NEVER be auto-assigned a B-stand.
   if (category === 'VIP') {
-    return [...vip, ...apron1, ...northAvailable, ...rest];
+    return [vip, apron1, northAvailable, rest];
   }
-  return [...apron1, ...northAvailable, ...rest, ...vip];
+  return [apron1, northAvailable, rest, vip];
 }
 
 function pickNextGate(icao, callsign, meta = {}) {
-  const order = preferredGateOrder(icao, callsign, meta);
-  // Pick a random free gate from the eligible candidates rather than always
-  // taking the first one. Category/heavy/blocked rules still constrain `order`.
-  const free = order.filter((g) => !gateInUse(icao, g));
-  if (free.length === 0) return null;
-  return free[Math.floor(Math.random() * free.length)];
+  const tiers = preferredGateTiers(icao, callsign, meta);
+  // Walk tiers in priority order; pick randomly from the first tier with a
+  // free gate. This keeps category/heavy/blocked rules strict while still
+  // spreading aircraft across equivalent gates within the same tier.
+  for (const tier of tiers) {
+    const free = tier.filter((g) => !gateInUse(icao, g));
+    if (free.length > 0) return free[Math.floor(Math.random() * free.length)];
+  }
+  return null;
 }
 
 function ensureAirportBucket(icao) {
