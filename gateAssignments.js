@@ -132,14 +132,19 @@ function preferredGateTiers(icao, callsign, meta = {}) {
   // Filter out gates that should never be auto-assigned.
   const allowed = all.filter((g) => !MDPC_BLOCKED_AUTO_GATES.has(g));
 
-  // Heavy aircraft: dedicated B-stands first, apron-1 only if those are full.
-  if (isHeavyType(meta.aircraftType)) {
-    const heavyB = MDPC_HEAVY_PREFERRED.filter((g) => allowed.includes(g));
-    const heavyApron = MDPC_HEAVY_OVERFLOW.filter((g) => allowed.includes(g));
-    return [heavyB, heavyApron];
-  }
-
   const category = classifyCallsign(callsign);
+
+  // Heavy aircraft: dedicated B-stands first, apron-1 only if those are full.
+  // Only Terminal-B airlines may take a B-stand; non-B heavies are sent
+  // straight to the apron-1 heavy overflow so they never block a B gate.
+  if (isHeavyType(meta.aircraftType)) {
+    const heavyApron = MDPC_HEAVY_OVERFLOW.filter((g) => allowed.includes(g));
+    if (category === 'B') {
+      const heavyB = MDPC_HEAVY_PREFERRED.filter((g) => allowed.includes(g));
+      return [heavyB, heavyApron];
+    }
+    return [heavyApron];
+  }
   const terminalB = allowed.filter((g) => /^B\d/.test(g));
   const vip = allowed.filter((g) => g === 'TVIP');
   const cargo = allowed.filter((g) => /^C\d/.test(g));
