@@ -3,67 +3,471 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DR Gate Assignments</title>
+  <title>DR Gate Operations · VATSIM</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
+    :root {
+      --bg: #0b1220;
+      --panel: #111a2e;
+      --panel-2: #18233f;
+      --panel-3: #1d2a4a;
+      --border: #1f2a44;
+      --border-strong: #2e3e63;
+      --text: #e6edf6;
+      --text-dim: #b3bdd0;
+      --muted: #8a95a8;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --success: #22c55e;
+      --success-bg: rgba(34,197,94,.15);
+      --warn: #f59e0b;
+      --warn-bg: rgba(245,158,11,.18);
+      --danger: #ef4444;
+      --danger-bg: rgba(239,68,68,.15);
+      --info-bg: rgba(59,130,246,.15);
+      --radius: 8px;
+      --radius-sm: 6px;
+      --shadow: 0 4px 12px rgba(0,0,0,.4);
+      --mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+    }
     * { box-sizing: border-box; }
-    html, body { margin: 0; height: 100%; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+    html, body {
+      margin: 0; height: 100%;
+      font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg); color: var(--text);
+      font-size: 14px; line-height: 1.45;
+      -webkit-font-smoothing: antialiased;
+    }
     #app { display: flex; height: 100vh; }
-    #map { flex: 1 1 auto; }
+    #map { flex: 1 1 auto; background: #0a1020; }
+
+    /* Sidebar layout */
     #sidebar {
-      width: 380px; flex: 0 0 380px; background: #f7f7fa; border-left: 1px solid #ddd;
-      overflow-y: auto; padding: 12px 16px;
+      width: 400px; flex: 0 0 400px;
+      background: var(--panel);
+      border-left: 1px solid var(--border);
+      display: flex; flex-direction: column;
+      min-height: 0;
     }
-    h1 { font-size: 18px; margin: 0 0 4px; }
-    h2 { font-size: 15px; margin: 14px 0 6px; }
-    .muted { color: #666; font-size: 12px; }
-    .airport { padding: 6px 8px; border-radius: 6px; cursor: pointer; margin-bottom: 4px; }
-    .airport:hover { background: #ececf2; }
-    .airport.active { background: #2563eb; color: white; }
-    .row { display: flex; justify-content: space-between; align-items: center; gap: 6px; padding: 4px 0; border-bottom: 1px solid #eee; font-size: 13px; }
-    .row:last-child { border-bottom: none; }
-    .pill { display: inline-block; background: #e5e7eb; color: #111; border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 600; }
-    .pill.manual { background: #fde68a; }
-    .pill.auto { background: #bbf7d0; }
+    .sidebar-header {
+      padding: 16px 18px 14px;
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(180deg, #16223e 0%, var(--panel) 100%);
+    }
+    .sidebar-header h1 {
+      font-size: 16px; font-weight: 600; margin: 0;
+      display: flex; align-items: center; gap: 9px;
+      letter-spacing: .2px;
+    }
+    .sidebar-header h1::before {
+      content: ""; display: inline-block;
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 0 3px var(--info-bg);
+    }
+    .subtitle {
+      font-size: 10px; color: var(--muted);
+      margin-top: 5px; text-transform: uppercase; letter-spacing: 1.2px;
+    }
+    .status-bar {
+      display: flex; align-items: center; gap: 9px;
+      margin-top: 12px; padding: 8px 11px;
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+    }
+    .status-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--success); flex: 0 0 8px;
+      box-shadow: 0 0 0 0 currentColor;
+      animation: pulse 2.2s ease-in-out infinite;
+      color: var(--success);
+    }
+    .status-dot.loading { background: var(--warn); color: var(--warn); }
+    .status-dot.error { background: var(--danger); color: var(--danger); animation: none; }
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 0 0 0 currentColor; opacity: 1; }
+      50% { box-shadow: 0 0 0 5px transparent; opacity: .55; }
+    }
+    .status-text {
+      flex: 1 1 auto; color: var(--text-dim);
+      font-size: 12px; min-width: 0;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+
+    .sidebar-body {
+      flex: 1 1 auto; overflow-y: auto;
+      padding: 14px 18px 24px;
+    }
+
+    /* Section heading */
+    .section-title {
+      font-size: 10px; font-weight: 700; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 1.4px;
+      margin: 18px 0 8px;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .section-title:first-child { margin-top: 0; }
+    .section-title .count {
+      background: var(--panel-2); color: var(--text-dim);
+      padding: 2px 8px; border-radius: 999px;
+      font-size: 10px; letter-spacing: .3px;
+      border: 1px solid var(--border);
+    }
+
+    /* Search */
+    .search-wrap { position: relative; margin-bottom: 10px; }
+    .search-wrap input {
+      width: 100%; padding: 8px 10px 8px 30px;
+      background: var(--panel-2); color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      font-size: 13px; font-family: inherit;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    .search-wrap input::placeholder { color: var(--muted); }
+    .search-wrap input:focus {
+      outline: none; border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--info-bg);
+    }
+    .search-wrap::before {
+      content: "⌕"; position: absolute; left: 10px; top: 50%;
+      transform: translateY(-50%); color: var(--muted); font-size: 14px;
+    }
+
+    /* Airport tile */
+    .airport {
+      padding: 10px 12px; border-radius: var(--radius);
+      cursor: pointer; margin-bottom: 6px;
+      background: var(--panel-2);
+      border: 1px solid transparent;
+      transition: background .15s, border-color .15s, transform .08s;
+      display: flex; align-items: center; gap: 10px;
+    }
+    .airport:hover {
+      background: var(--panel-3); border-color: var(--border-strong);
+    }
+    .airport:active { transform: scale(.99); }
+    .airport.active {
+      background: linear-gradient(135deg, var(--accent) 0%, var(--accent-hover) 100%);
+      border-color: var(--accent); box-shadow: var(--shadow);
+    }
+    .airport.active .airport-name,
+    .airport.active .airport-meta { color: rgba(255,255,255,.92); }
+    .airport.active .airport-icao { background: rgba(0,0,0,.22); color: white; }
+    .airport-icao {
+      font-family: var(--mono);
+      font-weight: 700; font-size: 12px; letter-spacing: .5px;
+      background: rgba(255,255,255,.05);
+      padding: 5px 8px; border-radius: var(--radius-sm);
+      min-width: 52px; text-align: center; color: var(--text);
+    }
+    .airport-info { flex: 1 1 auto; min-width: 0; }
+    .airport-name {
+      font-size: 13px; font-weight: 500; color: var(--text);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .airport-meta {
+      font-size: 11px; color: var(--muted); margin-top: 2px;
+    }
+
+    /* Detail header */
+    .detail-header {
+      margin: 22px 0 0; padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .detail-header h2 {
+      margin: 0; font-size: 15px; font-weight: 600;
+      display: flex; align-items: baseline; gap: 8px;
+    }
+    .detail-header h2 .icao {
+      font-family: var(--mono); color: var(--accent);
+    }
+    .detail-header .name {
+      font-size: 12px; color: var(--muted); font-weight: 400;
+    }
+    .stats { display: flex; gap: 8px; margin-top: 12px; }
+    .stat {
+      flex: 1 1 0; background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 9px 10px; text-align: center;
+    }
+    .stat .v {
+      font-size: 19px; font-weight: 600; line-height: 1.1;
+      font-family: var(--mono);
+    }
+    .stat .l {
+      font-size: 9px; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 1px; margin-top: 4px;
+    }
+    .stat.used .v { color: var(--warn); }
+    .stat.free .v { color: var(--success); }
+    .stat.total .v { color: var(--text); }
+
+    /* Pills */
+    .pill {
+      display: inline-block; background: var(--panel-2);
+      color: var(--text-dim); border-radius: 999px;
+      padding: 2px 8px; font-size: 10px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: .5px;
+      border: 1px solid var(--border);
+    }
+    .pill.manual {
+      background: var(--warn-bg); color: var(--warn);
+      border-color: rgba(245,158,11,.4);
+    }
+    .pill.auto, .pill.detected, .pill.reservation {
+      background: var(--success-bg); color: var(--success);
+      border-color: rgba(34,197,94,.4);
+    }
+
+    /* Buttons */
     button {
-      border: 1px solid #ccc; background: white; border-radius: 4px; padding: 2px 6px;
-      cursor: pointer; font-size: 12px;
+      border: 1px solid var(--border-strong);
+      background: var(--panel-2); color: var(--text);
+      border-radius: var(--radius-sm); padding: 6px 11px;
+      cursor: pointer; font-size: 12px; font-weight: 500;
+      font-family: inherit;
+      transition: background .12s, border-color .12s, transform .08s;
     }
-    button:hover { background: #f0f0f0; }
-    button.danger { color: #b91c1c; border-color: #fca5a5; }
-    .gates-grid { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 12px; }
-    .gate-chip { font-size: 11px; padding: 2px 6px; border-radius: 4px; background: #e5e7eb; }
-    .gate-chip.used { background: #fecaca; color: #7f1d1d; }
-    .gate-chip.free { background: #bbf7d0; color: #14532d; }
-    #refresh { margin-left: 6px; }
-    .toolbar { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
-    input[type=text] { padding: 3px 6px; font-size: 12px; border: 1px solid #ccc; border-radius: 4px; }
-    .leaflet-popup-content { font-size: 13px; }
+    button:hover { background: var(--panel-3); border-color: var(--accent); }
+    button:active { transform: scale(.97); }
+    button.primary {
+      background: var(--accent); border-color: var(--accent); color: white;
+    }
+    button.primary:hover {
+      background: var(--accent-hover); border-color: var(--accent-hover);
+    }
+    button.danger {
+      color: var(--danger); border-color: rgba(239,68,68,.4);
+      background: var(--danger-bg);
+    }
+    button.danger:hover {
+      background: rgba(239,68,68,.25); border-color: var(--danger);
+    }
+    button.icon {
+      padding: 5px 8px; font-size: 12px; line-height: 1;
+    }
+
+    /* Gates grid */
+    .gates-grid {
+      display: flex; flex-wrap: wrap; gap: 4px;
+      margin: 8px 0 4px;
+    }
+    .gate-chip {
+      font-family: var(--mono);
+      font-size: 11px; font-weight: 600;
+      padding: 3px 7px; border-radius: var(--radius-sm);
+      background: var(--panel-2); color: var(--text-dim);
+      border: 1px solid var(--border);
+    }
+    .gate-chip.used {
+      background: var(--danger-bg); color: #fca5a5;
+      border-color: rgba(239,68,68,.4);
+    }
+    .gate-chip.free {
+      background: var(--success-bg); color: #86efac;
+      border-color: rgba(34,197,94,.4);
+    }
+    .gate-chip.shareable {
+      background: var(--info-bg); color: #93c5fd;
+      border-color: rgba(59,130,246,.45);
+    }
+
+    /* Assignment rows */
+    .assignments-list { display: flex; flex-direction: column; gap: 6px; }
+    .assignment {
+      display: flex; justify-content: space-between; align-items: center;
+      gap: 10px; padding: 10px 12px;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      transition: border-color .15s;
+    }
+    .assignment:hover { border-color: var(--border-strong); }
+    .assignment-left { min-width: 0; flex: 1 1 auto; }
+    .assignment-cs {
+      font-family: var(--mono);
+      font-weight: 700; font-size: 13px;
+      display: flex; align-items: center; gap: 6px;
+      margin-bottom: 3px; color: var(--text);
+    }
+    .assignment-meta {
+      font-size: 11px; color: var(--muted);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .assignment-right {
+      display: flex; align-items: center; gap: 4px; flex: 0 0 auto;
+    }
+    .assignment-gate {
+      font-family: var(--mono);
+      font-weight: 700; font-size: 12px;
+      color: #93c5fd;
+      background: var(--info-bg);
+      border: 1px solid rgba(59,130,246,.4);
+      border-radius: var(--radius-sm);
+      padding: 4px 9px; margin-right: 2px;
+    }
+
+    /* Manual add */
+    .manual-add {
+      display: flex; gap: 6px; align-items: center;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 8px;
+    }
+    .manual-add input {
+      flex: 1 1 0; min-width: 0;
+      padding: 7px 9px;
+      background: var(--bg); color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      font-size: 12px; font-family: var(--mono);
+    }
+    .manual-add input::placeholder { color: var(--muted); }
+    .manual-add input:focus {
+      outline: none; border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--info-bg);
+    }
+
+    .empty {
+      padding: 16px; text-align: center;
+      color: var(--muted); font-size: 12px;
+      background: var(--panel-2);
+      border: 1px dashed var(--border);
+      border-radius: var(--radius-sm);
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 9px; height: 9px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb {
+      background: var(--border-strong); border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover { background: #3a4a72; }
+
+    /* Leaflet dark overrides */
+    .leaflet-container { background: #0a1020 !important; font-family: inherit; }
+    .leaflet-popup-content-wrapper, .leaflet-tooltip {
+      background: var(--panel) !important; color: var(--text) !important;
+      border: 1px solid var(--border-strong) !important;
+      box-shadow: var(--shadow) !important;
+      border-radius: var(--radius-sm) !important;
+    }
+    .leaflet-popup-tip { background: var(--panel) !important; }
+    .leaflet-tooltip { padding: 4px 8px !important; font-size: 11px !important; }
+    .leaflet-tooltip-top:before { border-top-color: var(--border-strong) !important; }
+    .leaflet-tooltip-bottom:before { border-bottom-color: var(--border-strong) !important; }
+    .leaflet-tooltip-left:before { border-left-color: var(--border-strong) !important; }
+    .leaflet-tooltip-right:before { border-right-color: var(--border-strong) !important; }
+    .leaflet-popup-content { font-size: 12px; margin: 9px 13px; line-height: 1.5; }
+    .leaflet-popup-content strong { color: var(--accent); }
+    .leaflet-container a.leaflet-popup-close-button { color: var(--muted) !important; }
+    .leaflet-control-zoom a {
+      background: var(--panel) !important; color: var(--text) !important;
+      border-color: var(--border) !important;
+    }
+    .leaflet-control-zoom a:hover { background: var(--panel-2) !important; color: var(--accent) !important; }
+    .leaflet-control-layers {
+      background: var(--panel) !important; color: var(--text) !important;
+      border: 1px solid var(--border-strong) !important;
+      box-shadow: var(--shadow) !important;
+      border-radius: var(--radius-sm) !important;
+      font-size: 12px !important;
+    }
+    .leaflet-control-layers-expanded { padding: 8px 10px !important; }
+    .leaflet-control-layers label { color: var(--text) !important; margin: 3px 0 !important; }
+    .leaflet-control-layers-separator { border-top: 1px solid var(--border) !important; margin: 6px 0 !important; }
+    .leaflet-control-layers-toggle {
+      background-color: var(--panel) !important;
+      border: 1px solid var(--border) !important;
+      border-radius: var(--radius-sm) !important;
+    }
+    .leaflet-control-attribution {
+      background: rgba(17,26,46,.88) !important;
+      color: var(--text-dim) !important;
+      border: 1px solid var(--border) !important;
+      border-right: none !important; border-bottom: none !important;
+      font-size: 10px !important;
+      backdrop-filter: blur(6px);
+    }
+    .leaflet-control-attribution a { color: var(--accent) !important; }
   </style>
 </head>
 <body>
   <div id="app">
     <div id="map"></div>
     <aside id="sidebar">
-      <h1>DR Gate Assignments</h1>
-      <div class="toolbar">
-        <span class="muted" id="status">Loading…</span>
-        <button id="refresh" title="Force VATSIM refresh">Refresh</button>
+      <header class="sidebar-header">
+        <h1>DR Gate Operations</h1>
+        <div class="subtitle">Dominican Republic · VATSIM</div>
+        <div class="status-bar">
+          <span class="status-dot loading" id="status-dot"></span>
+          <span class="status-text" id="status">Loading…</span>
+          <button id="refresh" class="primary" title="Force VATSIM refresh">Refresh</button>
+        </div>
+      </header>
+      <div class="sidebar-body">
+        <div class="section-title">
+          <span>Airports</span>
+          <span class="count" id="airport-count">0</span>
+        </div>
+        <div class="search-wrap">
+          <input type="text" id="airport-filter" placeholder="Filter airports…" autocomplete="off" />
+        </div>
+        <div id="airport-list"></div>
+        <div id="airport-detail"></div>
       </div>
-      <h2>Airports</h2>
-      <div id="airport-list"></div>
-      <div id="airport-detail"></div>
     </aside>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
   (function () {
-    const map = L.map('map').setView([18.7, -70.0], 8);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap contributors',
-      maxZoom: 18
-    }).addTo(map);
+    const map = L.map('map', { zoomControl: true, attributionControl: true }).setView([18.7, -70.0], 8);
+
+    // Base layers — user can switch between dark map and satellite imagery.
+    const darkBase = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+      subdomains: 'abcd',
+      maxZoom: 19
+    });
+    const satelliteBase = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      attribution: 'Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community',
+      maxZoom: 19
+    });
+    // Optional labels overlay shown only with satellite.
+    const labelsOverlay = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; <a href="https://carto.com/attributions">CARTO</a>',
+      subdomains: 'abcd',
+      maxZoom: 19
+    });
+
+    // Restore last-used basemap, default to satellite.
+    const savedBase = (() => { try { return localStorage.getItem('basemap'); } catch (_) { return null; } })();
+    const initialBase = savedBase === 'dark' ? darkBase : satelliteBase;
+    initialBase.addTo(map);
+    if (initialBase === satelliteBase) labelsOverlay.addTo(map);
+
+    L.control.layers(
+      { 'Satellite': satelliteBase, 'Dark map': darkBase },
+      { 'Place labels': labelsOverlay },
+      { position: 'topright', collapsed: false }
+    ).addTo(map);
+
+    // Persist user's basemap choice and toggle the labels overlay with satellite.
+    map.on('baselayerchange', (e) => {
+      try { localStorage.setItem('basemap', e.layer === darkBase ? 'dark' : 'satellite'); } catch (_) { /* ignore */ }
+      if (e.layer === satelliteBase) {
+        if (!map.hasLayer(labelsOverlay)) labelsOverlay.addTo(map);
+      } else {
+        if (map.hasLayer(labelsOverlay)) map.removeLayer(labelsOverlay);
+      }
+    });
 
     const markers = {};
     let airports = [];
@@ -71,14 +475,17 @@
     const aircraftLayer = L.layerGroup().addTo(map);
     const gateLayer = L.layerGroup().addTo(map);
 
+    const SHAREABLE_GATES = new Set(['TVIP']);
     function gateDivIcon(label, occupied) {
-      const bg = occupied ? '#dc2626' : '#16a34a';
+      const shareable = SHAREABLE_GATES.has(label);
+      const bg = shareable ? '#3b82f6' : (occupied ? '#dc2626' : '#16a34a');
       return L.divIcon({
         className: 'gate-icon',
         html:
           `<div style="background:${bg};color:white;font-size:10px;font-weight:600;` +
-          `padding:1px 4px;border-radius:3px;border:1px solid white;` +
-          `box-shadow:0 0 2px rgba(0,0,0,.5);white-space:nowrap;">${label}</div>`,
+          `padding:2px 5px;border-radius:4px;border:1px solid rgba(255,255,255,.85);` +
+          `box-shadow:0 1px 3px rgba(0,0,0,.6);white-space:nowrap;` +
+          `font-family:'JetBrains Mono',monospace;letter-spacing:.3px;">${label}</div>`,
         iconSize: null,
         iconAnchor: [12, 6]
       });
@@ -120,8 +527,19 @@
       return data;
     }
 
-    function setStatus(msg) {
+    function setStatus(msg, state) {
       document.getElementById('status').textContent = msg;
+      const dot = document.getElementById('status-dot');
+      if (dot) {
+        dot.classList.remove('loading', 'error');
+        if (state === 'loading' || state === 'error') dot.classList.add(state);
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
     }
 
     async function loadAirports() {
@@ -137,15 +555,32 @@
       });
     }
 
+    let airportFilter = '';
     function renderAirportList() {
       const list = document.getElementById('airport-list');
       list.innerHTML = '';
-      airports.forEach((a) => {
+      const q = airportFilter.trim().toLowerCase();
+      const filtered = airports.filter((a) =>
+        !q || a.icao.toLowerCase().includes(q) || (a.name || '').toLowerCase().includes(q)
+      );
+      const countEl = document.getElementById('airport-count');
+      if (countEl) countEl.textContent = String(filtered.length);
+      if (filtered.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent = q ? 'No airports match your filter.' : 'No airports loaded.';
+        list.appendChild(empty);
+        return;
+      }
+      filtered.forEach((a) => {
         const div = document.createElement('div');
         div.className = 'airport' + (a.icao === activeIcao ? ' active' : '');
         div.innerHTML =
-          `<strong>${a.icao}</strong> ${a.name} ` +
-          `<span class="pill">${a.assigned}/${a.totalGates}</span>`;
+          `<span class="airport-icao">${escapeHtml(a.icao)}</span>` +
+          `<div class="airport-info">` +
+            `<div class="airport-name">${escapeHtml(a.name || '')}</div>` +
+            `<div class="airport-meta">${a.assigned} / ${a.totalGates} gates assigned</div>` +
+          `</div>`;
         div.addEventListener('click', () => selectAirport(a.icao));
         list.appendChild(div);
       });
@@ -161,64 +596,72 @@
 
     async function renderDetail(icao) {
       const detail = document.getElementById('airport-detail');
-      detail.innerHTML = '<p class="muted">Loading…</p>';
+      detail.innerHTML = '<div class="empty">Loading airport detail…</div>';
       let data;
       try {
         data = await api('/gates/' + icao);
       } catch (e) {
-        detail.innerHTML = `<p class="muted">Error: ${e.message}</p>`;
+        detail.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
         return;
       }
       renderGates(data);
-      const allGates = [...data.available, ...data.assignments.map((x) => x.gate)];
-      const sortedGates = data.available.concat([]).sort();
       const used = new Set(data.assignments.map((x) => x.gate));
 
-      let html = `<h2>${data.icao} — ${data.name}</h2>`;
-      html += `<p class="muted">${data.assignments.length} assigned · ${data.available.length} free · ${data.totalGates} total</p>`;
+      let html = '';
+      html += `<div class="detail-header">`;
+      html +=   `<h2><span class="icao">${escapeHtml(data.icao)}</span> <span class="name">${escapeHtml(data.name || '')}</span></h2>`;
+      html +=   `<div class="stats">`;
+      html +=     `<div class="stat used"><div class="v">${data.assignments.length}</div><div class="l">Assigned</div></div>`;
+      html +=     `<div class="stat free"><div class="v">${data.available.length}</div><div class="l">Free</div></div>`;
+      html +=     `<div class="stat total"><div class="v">${data.totalGates}</div><div class="l">Total</div></div>`;
+      html +=   `</div>`;
+      html += `</div>`;
 
+      html += `<div class="section-title"><span>Gates</span><span class="count">${data.totalGates}</span></div>`;
       html += '<div class="gates-grid">';
-      // include all gates in original order: assigned first, then free
       const inventory = [...data.assignments.map((x) => x.gate), ...data.available];
       const seen = new Set();
       inventory.forEach((g) => {
         if (seen.has(g)) return; seen.add(g);
-        const cls = used.has(g) ? 'used' : 'free';
-        html += `<span class="gate-chip ${cls}">${g}</span>`;
+        let cls;
+        if (SHAREABLE_GATES.has(g)) cls = 'shareable';
+        else cls = used.has(g) ? 'used' : 'free';
+        html += `<span class="gate-chip ${cls}">${escapeHtml(g)}</span>`;
       });
       html += '</div>';
 
-      html += '<h2>Assignments</h2>';
+      html += `<div class="section-title"><span>Assignments</span><span class="count">${data.assignments.length}</span></div>`;
       if (data.assignments.length === 0) {
-        html += '<p class="muted">No aircraft currently assigned.</p>';
+        html += '<div class="empty">No aircraft currently assigned.</div>';
       } else {
+        html += '<div class="assignments-list">';
         data.assignments.forEach((entry) => {
           const src = entry.source || (entry.manual ? 'manual' : 'reservation');
-          const pillCls = src === 'manual' ? 'manual' : (src === 'detected' ? 'auto' : 'auto');
-          const pillTxt = src;
+          const pillCls = src === 'manual' ? 'manual' : 'auto';
+          const cs = escapeHtml(entry.callsign);
           html += `
-            <div class="row" data-cs="${entry.callsign}">
-              <div>
-                <strong>${entry.callsign}</strong>
-                <span class="pill ${pillCls}">${pillTxt}</span><br>
-                <span class="muted">${entry.aircraftType || '—'} · from ${entry.origin || '—'}</span>
+            <div class="assignment" data-cs="${cs}">
+              <div class="assignment-left">
+                <div class="assignment-cs">${cs} <span class="pill ${pillCls}">${escapeHtml(src)}</span></div>
+                <div class="assignment-meta">${escapeHtml(entry.aircraftType || '—')} · from ${escapeHtml(entry.origin || '—')}</div>
               </div>
-              <div>
-                <strong>${entry.gate}</strong>
-                <button data-action="change" data-cs="${entry.callsign}">Change</button>
-                <button class="danger" data-action="release" data-cs="${entry.callsign}">×</button>
+              <div class="assignment-right">
+                <span class="assignment-gate">${escapeHtml(entry.gate)}</span>
+                <button class="icon" data-action="change" data-cs="${cs}" title="Change gate">✎</button>
+                <button class="icon danger" data-action="release" data-cs="${cs}" title="Release">×</button>
               </div>
             </div>
           `;
         });
+        html += '</div>';
       }
 
-      html += '<h2>Manual add</h2>';
+      html += `<div class="section-title"><span>Manual Add</span></div>`;
       html += `
-        <div class="row">
-          <input type="text" id="manual-cs" placeholder="Callsign" style="width:90px" />
-          <input type="text" id="manual-gate" placeholder="Gate (optional)" style="width:110px" />
-          <button id="manual-add">Add</button>
+        <div class="manual-add">
+          <input type="text" id="manual-cs" placeholder="Callsign" />
+          <input type="text" id="manual-gate" placeholder="Gate (optional)" />
+          <button id="manual-add" class="primary">Add</button>
         </div>
       `;
 
@@ -240,13 +683,13 @@
 
     async function refreshAll() {
       try {
-        setStatus('Refreshing…');
+        setStatus('Refreshing…', 'loading');
         await api('/gates/refresh', { method: 'POST' });
         await loadAirportCounts();
         if (activeIcao) await renderDetail(activeIcao);
-        setStatus('Updated ' + new Date().toLocaleTimeString());
+        setStatus('Updated ' + new Date().toLocaleTimeString(), 'ok');
       } catch (e) {
-        setStatus('Error: ' + e.message);
+        setStatus('Error: ' + e.message, 'error');
       }
     }
 
@@ -317,16 +760,20 @@
     }
 
     document.getElementById('refresh').addEventListener('click', refreshAll);
+    document.getElementById('airport-filter').addEventListener('input', (e) => {
+      airportFilter = e.target.value || '';
+      renderAirportList();
+    });
 
     (async () => {
       try {
         await loadAirports();
-        setStatus('Ready');
+        setStatus('Ready', 'ok');
         await loadAircraft();
         setInterval(loadAircraft, 30000);
         setInterval(loadAirportCounts, 60000);
       } catch (e) {
-        setStatus('Error: ' + e.message);
+        setStatus('Error: ' + e.message, 'error');
       }
     })();
   })();

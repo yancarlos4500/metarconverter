@@ -49,6 +49,14 @@ const MDPC_BLOCKED_AUTO_GATES = new Set([
   'B23A', 'B23B', 'B29A', 'B30A'
 ]);
 
+// Gates that can hold an unlimited number of aircraft simultaneously.
+// These never count as "in use" for conflict/occupancy checks.
+const SHAREABLE_GATES = new Set(['TVIP']);
+
+function isShareableGate(gate) {
+  return SHAREABLE_GATES.has(gate);
+}
+
 // MDPC heavy-jet stands, in tiered priority order:
 //   tier 1: dedicated heavy B-stands; tier 2: apron-1 fallback gates.
 const MDPC_HEAVY_PREFERRED = ['B25', 'B23', 'B30'];
@@ -112,6 +120,7 @@ function nearestGate(icao, lat, lon) {
 
 // reverse lookup: gate -> callsign per airport
 function gateInUse(icao, gate) {
+  if (isShareableGate(gate)) return false;
   const a = assignments[icao] || {};
   return Object.values(a).some((entry) => entry.gate === gate);
 }
@@ -168,8 +177,9 @@ function preferredGateTiers(icao, callsign, meta = {}) {
     return [terminalB, apron1, northAvailable, rest];
   }
   // Non-Terminal-B traffic must NEVER be auto-assigned a B-stand.
+  // All GA aircraft go to TVIP, regardless of callsign — no fallback.
   if (category === 'VIP') {
-    return [vip, apron1, northAvailable, rest];
+    return [vip];
   }
   return [apron1, northAvailable, rest, vip];
 }
@@ -226,17 +236,20 @@ function detectGateOccupancy(icao, callsign, lat, lon, meta = {}) {
   const now = Date.now();
 
   // Evict whoever is sitting on that gate by a stale reservation.
-  for (const [cs, entry] of Object.entries(bucket)) {
-    if (cs === callsign) continue;
-    if (entry.gate !== near.gate) continue;
-    if (entry.source === 'detected') {
-      // Two aircraft can't physically occupy the same stand at once. Keep the
-      // most recent detection; older one is released.
-      delete bucket[cs];
-    } else {
-      // Reservation/manual: bump them to another free gate if possible.
-      const alt = pickNextGate(icao, cs, { aircraftType: entry.aircraftType });
-      if (alt) entry.gate = alt; else delete bucket[cs];
+  // Shareable gates (e.g. TVIP) allow unlimited co-occupancy, so skip eviction.
+  if (!isShareableGate(near.gate)) {
+    for (const [cs, entry] of Object.entries(bucket)) {
+      if (cs === callsign) continue;
+      if (entry.gate !== near.gate) continue;
+      if (entry.source === 'detected') {
+        // Two aircraft can't physically occupy the same stand at once. Keep the
+        // most recent detection; older one is released.
+        delete bucket[cs];
+      } else {
+        // Reservation/manual: bump them to another free gate if possible.
+        const alt = pickNextGate(icao, cs, { aircraftType: entry.aircraftType });
+        if (alt) entry.gate = alt; else delete bucket[cs];
+      }
     }
   }
 
@@ -265,12 +278,15 @@ function setAssignment(icao, callsign, gate) {
     throw err;
   }
   const bucket = ensureAirportBucket(icao);
-  // If gate is in use by another callsign, reject.
-  for (const [cs, entry] of Object.entries(bucket)) {
-    if (cs !== callsign && entry.gate === gate) {
-      const err = new Error(`Gate '${gate}' is already assigned to ${cs}.`);
-      err.statusCode = 409;
-      throw err;
+  // If gate is in use by another callsign, reject. Shareable gates (e.g. TVIP)
+  // can hold unlimited aircraft, so skip the conflict check.
+  if (!isShareableGate(gate)) {
+    for (const [cs, entry] of Object.entries(bucket)) {
+      if (cs !== callsign && entry.gate === gate) {
+        const err = new Error(`Gate '${gate}' is already assigned to ${cs}.`);
+        err.statusCode = 409;
+        throw err;
+      }
     }
   }
   const existing = bucket[callsign] || { aircraftType: null, origin: null, lastSeen: Date.now() };
@@ -330,9 +346,15 @@ function listAssignments(icao) {
     lastSeen: new Date(entry.lastSeen).toISOString()
   }));
   const used = new Set(assigned.map((a) => a.gate));
-  const available = inventory.gates.filter((g) => !used.has(g));
+  // Shareable gates (e.g. TVIP) hold unlimited aircraft and are always "available".
+  const available = inventory.gates.filter((g) => isShareableGate(g) || !used.has(g));
   const positions = gatePositions(icao);
-  const callsignByGate = Object.fromEntries(assigned.map((a) => [a.gate, a.callsign]));
+  // Multiple callsigns can share TVIP; join them for display.
+  const callsignsByGate = {};
+  for (const a of assigned) {
+    if (!callsignsByGate[a.gate]) callsignsByGate[a.gate] = [];
+    callsignsByGate[a.gate].push(a.callsign);
+  }
   return {
     icao,
     name: inventory.name,
@@ -343,8 +365,8 @@ function listAssignments(icao) {
     assignments: assigned,
     gates: positions.map((p) => ({
       ...p,
-      occupied: used.has(p.gate),
-      callsign: callsignByGate[p.gate] || null
+      occupied: !isShareableGate(p.gate) && used.has(p.gate),
+      callsign: callsignsByGate[p.gate] ? callsignsByGate[p.gate].join(', ') : null
     }))
   };
 }
