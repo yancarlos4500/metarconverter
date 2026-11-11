@@ -27,7 +27,9 @@ const TERMINAL_B_AIRLINES = new Set([
   'EDW', // Edelweiss
   'SWA',  // Southwest
   'UAL', // United
-  'JBU' // JetBlue
+  'JBU', // JetBlue
+  'AFR', // Air France
+  'CFG' // Condor
 ]);
 
 // Classify a callsign into a parking preference category for MDPC.
