@@ -22,6 +22,8 @@ Server starts on `http://localhost:3000`.
 
 `PORT` is provided automatically by Railway, and this API already uses `process.env.PORT`.
 
+The map uses OpenStreetMap and Esri public tile services, so no map API key is required.
+
 ## Endpoint
 
 `GET /metar?ids=MDSD,MDPC&format=xml`
